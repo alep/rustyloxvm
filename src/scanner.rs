@@ -1,5 +1,3 @@
-use crate::errors::ScannerError;
-
 #[derive(Debug, Eq, PartialEq)]
 pub enum TokenType {
     LeftParen,
@@ -51,9 +49,18 @@ const RADIX: u32 = 10;
 #[derive(Debug, Eq, PartialEq)]
 pub struct Token {
     type_: TokenType,
-    start: usize,
-    length: usize,
+    lexeme: String, // in the compiler book this is a pointer which works to set the error msg.
     line: usize,
+}
+
+impl Token {
+    pub fn is_err(&self) -> bool {
+        self.type_ == TokenType::Error
+    }
+
+    pub fn message(&self) -> String {
+        self.lexeme.clone()
+    }
 }
 
 pub struct Scanner {
@@ -75,7 +82,7 @@ impl Scanner {
         }
     }
 
-    fn scan_token(&mut self) -> Result<Token, ScannerError> {
+    pub fn scan_token(&mut self) -> Token {
         self.skip_whitespace();
 
         self.start = self.current; // set start of the token
@@ -162,7 +169,7 @@ impl Scanner {
         }
     }
 
-    fn advance(&mut self) -> char {
+    pub fn advance(&mut self) -> char {
         let ch = self.source[self.current];
         self.current += 1;
         ch
@@ -200,7 +207,7 @@ impl Scanner {
         return self.current == self.source.len();
     }
 
-    fn string(&mut self) -> Result<Token, ScannerError> {
+    fn string(&mut self) -> Token {
         while self.peek() != '"' && !self.is_at_end() {
             if self.peek() == '\n' {
                 self.line += 1;
@@ -216,7 +223,7 @@ impl Scanner {
         self.make_token(TokenType::String)
     }
 
-    fn number(&mut self) -> Result<Token, ScannerError> {
+    fn number(&mut self) -> Token {
         let radix = 10;
         while self.peek().is_digit(radix) {
             self.advance();
@@ -235,24 +242,43 @@ impl Scanner {
         return self.make_token(TokenType::Number);
     }
 
-    fn identifier(&mut self) -> Result<Token, ScannerError> {
+    fn identifier(&mut self) -> Token {
         // One needs to check that the identifier starts with alpha before calling this function
         while self.peek().is_alphabetic() || self.peek() == '_' || self.peek().is_digit(RADIX) {
             self.advance();
         }
-        self.make_token(TokenType::Identifier)
+        let tok_type = self.identifier_type();
+        self.make_token(tok_type)
     }
 
-    fn identifier_type(&self) -> Result<Token, ScannerError> {
-        let tok_type = match self.source[self.start] {
-            'a' => self.check_keyword("nd", 1, 2, TokenType::And),
-            'c' => self.check_keyword("lass", 1, 4, TokenType::Class),
-            'e' => self.check_keyword("lse", 1, 3, TokenType::Else),
-            'i' => self.check_keyword("f", 1, 1, TokenType::If),
-            'n' => self.check_keyword("il", 1, 2, TokenType::Nil),
+    fn identifier_type(&self) -> TokenType {
+        let got_next = self.current - self.start > 1;
+        match (self.source[self.start], got_next) {
+            ('a', _) => self.check_keyword("nd", 1, 2, TokenType::And),
+            ('c', _) => self.check_keyword("lass", 1, 4, TokenType::Class),
+            ('e', _) => self.check_keyword("lse", 1, 3, TokenType::Else),
+            ('f', true) => match self.source[self.start + 1] {
+                'a' => self.check_keyword("lse", 2, 3, TokenType::False),
+                'o' => self.check_keyword("r", 2, 1, TokenType::For),
+                'u' => self.check_keyword("n", 2, 1, TokenType::Fun),
+                _ => TokenType::Identifier,
+            },
+            ('i', _) => self.check_keyword("f", 1, 1, TokenType::If),
+            ('n', _) => self.check_keyword("il", 1, 2, TokenType::Nil),
+            ('o', _) => self.check_keyword("r", 1, 1, TokenType::Or),
+            ('p', _) => self.check_keyword("rint", 1, 4, TokenType::Print),
+            ('r', _) => self.check_keyword("eturn", 1, 5, TokenType::Return),
+            ('s', _) => self.check_keyword("uper", 1, 4, TokenType::Super),
+            ('t', _) => match self.source[self.start + 1] {
+                'h' => self.check_keyword("is", 2, 2, TokenType::This),
+                'r' => self.check_keyword("ue", 2, 2, TokenType::True),
+                _ => TokenType::Identifier,
+            },
+            ('v', _) => self.check_keyword("ar", 1, 2, TokenType::Var),
+            ('w', _) => self.check_keyword("hile", 1, 4, TokenType::While),
+
             _ => TokenType::Identifier,
-        };
-        self.make_token(tok_type)
+        }
     }
 
     fn check_keyword(
@@ -268,23 +294,21 @@ impl Scanner {
         return TokenType::Identifier;
     }
 
-    fn make_token(&self, type_: TokenType) -> Result<Token, ScannerError> {
-        return Ok(Token {
+    fn make_token(&self, type_: TokenType) -> Token {
+        return Token {
             type_,
-            start: self.start,
-            length: self.current - self.start,
+            lexeme: self.source[self.start..self.current]
+                .iter()
+                .collect::<String>(),
             line: self.line,
-        });
+        };
     }
-    fn make_error(&self, msg: String) -> Result<Token, ScannerError> {
-        println!(
-            "*{:}",
-            self.source[self.current..].iter().collect::<String>()
-        );
-        return Err(ScannerError {
-            message: msg,
+    fn make_error(&self, msg: String) -> Token {
+        return Token {
+            type_: TokenType::Error,
+            lexeme: msg,
             line: self.line,
-        });
+        };
     }
 }
 
@@ -315,11 +339,10 @@ mod test_scanner {
     fn test_empty_string_scan() {
         let mut scnnr = Scanner::new(&"");
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::Eof,
-                start: 0,
-                length: 0,
+                lexeme: "".to_string(),
                 line: 1
             }
         )
@@ -329,38 +352,34 @@ mod test_scanner {
     fn test_parens_scan() {
         let mut scnnr = Scanner::new(&"(  (  )    )");
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::LeftParen,
-                start: 0,
-                length: 1,
+                lexeme: "(".to_string(),
                 line: 1
             }
         );
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::LeftParen,
-                start: 3,
-                length: 1,
+                lexeme: "(".to_string(),
                 line: 1
             }
         );
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::RightParen,
-                start: 6,
-                length: 1,
+                lexeme: ")".to_string(),
                 line: 1
             }
         );
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::RightParen,
-                start: 11,
-                length: 1,
+                lexeme: ")".to_string(),
                 line: 1
             }
         );
@@ -369,47 +388,42 @@ mod test_scanner {
     fn test_lookahead_scan() {
         let mut scnnr = Scanner::new(&"== =!= >= \n <= ");
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::EqualEqual,
-                start: 0,
-                length: 2,
+                lexeme: "==".to_string(),
                 line: 1
             }
         );
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::Equal,
-                start: 3,
-                length: 1,
+                lexeme: "=".to_string(),
                 line: 1
             }
         );
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::BangEqual,
-                start: 4,
-                length: 2,
+                lexeme: "!=".to_string(),
                 line: 1
             }
         );
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::GreaterEqual,
-                start: 7,
-                length: 2,
+                lexeme: ">=".to_string(),
                 line: 1
             }
         );
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::LessEqual,
-                start: 12,
-                length: 2,
+                lexeme: "<=".to_string(),
                 line: 2
             }
         )
@@ -419,29 +433,26 @@ mod test_scanner {
     fn test_comment() {
         let mut scnnr = Scanner::new(&"== / // this is a comment \n <= ");
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::EqualEqual,
-                start: 0,
-                length: 2,
+                lexeme: "==".to_string(),
                 line: 1
             }
         );
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::Slash,
-                start: 3,
-                length: 1,
+                lexeme: "/".to_string(),
                 line: 1
             }
         );
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::LessEqual,
-                start: 28,
-                length: 2,
+                lexeme: "<=".to_string(),
                 line: 2
             }
         )
@@ -451,11 +462,10 @@ mod test_scanner {
     fn test_parse_multiline_string() {
         let mut scnnr = Scanner::new("\"...\n...\n\"");
         assert_eq!(
-            scnnr.scan_token().unwrap(),
+            scnnr.scan_token(),
             Token {
                 type_: TokenType::String,
-                start: 0,
-                length: 10,
+                lexeme: "\"...\n...\n\"".to_string(),
                 line: 3
             }
         )
@@ -465,22 +475,50 @@ mod test_scanner {
     fn test_parse_number() {
         let mut s = Scanner::new("1.2 345.6");
         assert_eq!(
-            s.scan_token().unwrap(),
+            s.scan_token(),
             Token {
                 type_: TokenType::Number,
-                start: 0,
-                length: 3,
+                lexeme: "1.2".to_string(),
                 line: 1
             }
         );
         assert_eq!(
-            s.scan_token().unwrap(),
+            s.scan_token(),
             Token {
                 type_: TokenType::Number,
-                start: 4,
-                length: 5,
+                lexeme: "345.6".to_string(),
                 line: 1
             }
         )
+    }
+
+    #[test]
+    fn test_parse_identifiers() {
+        let mut s = Scanner::new("while true { print \"hello, world\"; }");
+        assert_eq!(
+            s.scan_token(),
+            Token {
+                type_: TokenType::While,
+                lexeme: "while".to_string(),
+                line: 1
+            }
+        );
+        assert_eq!(
+            s.scan_token(),
+            Token {
+                type_: TokenType::True,
+                lexeme: "true".to_string(),
+                line: 1,
+            }
+        );
+        s.scan_token();
+        assert_eq!(
+            s.scan_token(),
+            Token {
+                type_: TokenType::Print,
+                lexeme: "print".to_string(),
+                line: 1,
+            }
+        );
     }
 }
